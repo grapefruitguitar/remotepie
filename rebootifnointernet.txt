@@ -1,0 +1,122 @@
+#!/bin/bash
+
+# Log file path
+LOG_FOLDER="/home/me/logfilesfor_rebootifnointernet"
+
+# Windows machine details
+WINDOWS_USERNAME="windowsuser"            # Replace with your Windows username
+WINDOWS_IP="windowsip"         # Replace with the IP address of your Windows machine
+DESTINATION_DIR="D:\linux\logs\rebootifnointernet"  # Replace with the desired destination directory on your Windows machine
+
+# Function to log messages
+log() {
+  local timestamp=$(date +"%Y-%m-%d_%H%M%S")
+  local hostname=$(hostname)
+  local log_file="$LOG_FOLDER/${timestamp}_${hostname}_log.txt"
+  echo "[$timestamp] [$hostname] $1" | tee -a "$log_file"
+}
+
+# Function to check if Google is reachable
+check_internet() {
+  ping -c 1 google.com > /dev/null 2>&1
+  return $?
+}
+
+# Function to check if Windows machine is up
+check_windows_machine() {
+  ping -c 1 "$WINDOWS_IP" > /dev/null 2>&1
+  return $?
+}
+
+# Function to gather detailed system information
+gather_system_info() {
+  local system_info_file="$LOG_FOLDER/system_info.txt"
+  
+  # Gather detailed system information
+  echo "Detailed System Information:" >> "$system_info_file"
+  echo "----------------------------" >> "$system_info_file"
+  uname -a >> "$system_info_file"
+  echo >> "$system_info_file"
+  lsb_release -a >> "$system_info_file"
+  echo >> "$system_info_file"
+  df -h >> "$system_info_file"
+  echo >> "$system_info_file"
+  free -h >> "$system_info_file"
+  echo >> "$system_info_file"
+  systemctl status >> "$system_info_file"
+  echo >> "$system_info_file"
+  journalctl -p err -b >> "$system_info_file"
+  echo >> "$system_info_file"
+  iwlist wlan0 scan >> "$system_info_file"
+  echo >> "$system_info_file"
+  # Add other network details or commands as needed
+}
+
+# Function to transfer log files to Windows machine
+transfer_files() {
+  local timestamp=$(date +"%Y-%m-%d_%H%M%S")
+  local hostname=$(hostname)
+  local zip_file="$LOG_FOLDER/${timestamp}_${hostname}_logs.zip"
+  
+  # Compress log files and system information into a zip file
+  zip -r "$zip_file" "$LOG_FOLDER"
+  
+  # Transfer zip file to Windows machine using SCP
+  scp -i /home/me/.ssh/id_rsa -C "$zip_file" "$WINDOWS_USERNAME@$WINDOWS_IP:$DESTINATION_DIR"
+  if [ $? -eq 0 ]; then
+    log "Log files transferred to Windows machine successfully."
+    
+    # Delete local log files after successful transfer
+    rm -rf "$LOG_FOLDER"
+  else
+    log "Failed to transfer log files to Windows machine."
+  fi
+}
+
+# Create the log folder with the hostname of the Pi in the destination path
+LOG_FOLDER="$LOG_FOLDER/$(hostname)"
+
+# Transfer log files on script start
+log "Script started. Transferring log files to Windows machine..."
+check_windows_machine
+if [ $? -eq 0 ]; then
+  mkdir -p "$LOG_FOLDER"
+  gather_system_info
+  transfer_files
+else
+  log "Windows machine is not reachable. Log files will be transferred on the next opportunity."
+fi
+
+# Main loop to continuously check the network connection and Google reachability
+while true; do
+  # Check if Google is reachable
+  log "Checking Google reachability..."
+  check_internet
+  if [ $? -eq 0 ]; then
+    log "Google is reachable."
+    
+    # Check if Windows machine is up
+    log "Checking Windows machine reachability..."
+    check_windows_machine
+    
+    if [ $? -eq 0 ]; then
+      log "Windows machine is up. Starting log file transfer."
+      
+      # Create log folder if it doesn't exist
+      mkdir -p "$LOG_FOLDER"
+      
+      # Gather detailed system information
+      gather_system_info
+      
+      # Transfer log files to Windows machine
+      transfer_files
+    else
+      log "Windows machine is not reachable. Waiting for the next opportunity."
+    fi
+  else
+    log "Google is not reachable."
+  fi
+
+  # Sleep for 5 minutes before checking again
+  sleep 300
+done
